@@ -40,14 +40,15 @@ end
 
 function transform(pt, center, scale, rot, res, invert)
     local pt_ = torch.ones(3)
-    pt_[1] = pt[1]
-    pt_[2] = pt[2]
+    pt_[1],pt_[2] = pt[1]-1,pt[2]-1
+
     local t = getTransform(center, scale, rot, res)
     if invert then
         t = torch.inverse(t)
     end
-    local new_point = (t*pt_):sub(1,2):int()
-    return new_point
+    local new_point = (t*pt_):sub(1,2):add(1e-4)
+
+    return new_point:int():add(1)
 end
 
 -------------------------------------------------------------------------------
@@ -56,7 +57,8 @@ end
 
 function crop(img, center, scale, rot, res)
     local ul = transform({1,1}, center, scale, 0, res, true)
-    local br = transform({res,res}, center, scale, 0, res, true)
+    local br = transform({res+1,res+1}, center, scale, 0, res, true)
+
 
     local pad = math.floor(torch.norm((ul - br):float())/2 - (br[1]-ul[1])/2)
     if rot ~= 0 then
@@ -67,23 +69,23 @@ function crop(img, center, scale, rot, res)
     local newDim,newImg,ht,wd
 
     if img:size():size() > 2 then
-        newDim = torch.IntTensor({img:size()[1], br[2] - ul[2], br[1] - ul[1]})
+        newDim = torch.IntTensor({img:size(1), br[2] - ul[2], br[1] - ul[1]})
         newImg = torch.zeros(newDim[1],newDim[2],newDim[3])
-        ht = img:size()[2]
-        wd = img:size()[3]
+        ht = img:size(2)
+        wd = img:size(3)
     else
         newDim = torch.IntTensor({br[2] - ul[2], br[1] - ul[1]})
         newImg = torch.zeros(newDim[1],newDim[2])
-        ht = img:size()[1]
-        wd = img:size()[2]
+        ht = img:size(1)
+        wd = img:size(2)
     end
 
-    local newX = torch.Tensor({math.max(1, -ul[1]+1), math.min(br[1], wd) - ul[1]})
-    local newY = torch.Tensor({math.max(1, -ul[2]+1), math.min(br[2], ht) - ul[2]})
-    local oldX = torch.Tensor({math.max(1, ul[1]+1), math.min(br[1], wd)})
-    local oldY = torch.Tensor({math.max(1, ul[2]+1), math.min(br[2], ht)})
+    local newX = torch.Tensor({math.max(1, -ul[1] + 2), math.min(br[1], wd+1) - ul[1]})
+    local newY = torch.Tensor({math.max(1, -ul[2] + 2), math.min(br[2], ht+1) - ul[2]})
+    local oldX = torch.Tensor({math.max(1, ul[1]), math.min(br[1], wd+1) - 1})
+    local oldY = torch.Tensor({math.max(1, ul[2]), math.min(br[2], ht+1) - 1})
 
-    if newDim:size()[1] > 2 then
+    if newDim:size(1) > 2 then
         newImg:sub(1,newDim[1],newY[1],newY[2],newX[1],newX[2]):copy(img:sub(1,newDim[1],oldY[1],oldY[2],oldX[1],oldX[2]))
     else
         newImg:sub(newY[1],newY[2],newX[1],newX[2]):copy(img:sub(oldY[1],oldY[2],oldX[1],oldX[2]))
@@ -91,7 +93,7 @@ function crop(img, center, scale, rot, res)
 
     if rot ~= 0 then
         newImg = image.rotate(newImg, rot * math.pi / 180, 'bilinear')
-        if newDim:size()[1] > 2 then
+        if newDim:size(1) > 2 then
             newImg = newImg:sub(1,newDim[1],pad,newDim[2]-pad,pad,newDim[3]-pad)
         else
             newImg = newImg:sub(pad,newDim[1]-pad,pad,newDim[2]-pad)
@@ -188,8 +190,6 @@ function drawLine(img,pt1,pt2,width,val,doGauss)
     doGauss = doGauss or 1
     pt1 = torch.Tensor(pt1)
     pt2 = torch.Tensor(pt2)
-    if pt1:sum() == 2 then print("hmmm")
-    elseif pt2:sum() == 2 then print("hrmmm") end
     m = torch.dist(pt1,pt2)
     dy = (pt2[2] - pt1[2])/m
     dx = (pt2[1] - pt1[1])/m
@@ -231,8 +231,12 @@ function shuffleLR(x)
             {11,16}, {12,15}, {13,14}
         }
     elseif opt.dataset == 'flic' then
-        matchedParts = {
+        matched_parts = {
             {1,4}, {2,5}, {3,6}, {7,8}, {9,10}
+        }
+    elseif opt.dataset == 'lsp' then
+        matched_parts = {
+            {1,6}, {2,5}, {3,4}, {7,12}, {8,11}, {9,10}
         }
     end
 

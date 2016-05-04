@@ -19,6 +19,7 @@ param, gradparam = model:getParameters()
 function step(tag)
     local avgLoss, avgAcc = 0.0, 0.0
     local r = ref[tag]
+    local idx
 
     if tag == 'train' then
         print("==> Starting epoch: " .. epoch .. "/" .. (opt.nEpochs + opt.epochNumber - 1))
@@ -32,19 +33,18 @@ function step(tag)
         isTesting = true
     end
 
+    if tag == 'predict' or (tag == 'valid' and trackBest) then idx = 1 end
+    local nextInput, nextLabel = loadData(set, nextIdx, r.batchsize)
+
     for i=1,r.iters do
         collectgarbage()
 
-        local output,err,idx
         xlua.progress(i, r.iters)
-
-        -- Load in data
-        if tag == 'predict' or (tag == 'valid' and trackBest) then idx = i end
-        local input, label = loadData(set, idx, r.batchsize)
+        local input, label = nextInput, nextLabel
 
         -- Do a forward pass and calculate loss
-        output = model:forward(input)
-        err = criterion:forward(output, label)
+        local output = model:forward(input)
+        local err = criterion:forward(output, label)
 
         -- Training: Do backpropagation and optimization
         if tag == 'train' then
@@ -64,6 +64,11 @@ function step(tag)
 
         end
 
+        -- Load up next sample, runs simultaneously with GPU
+        -- If idx is nil, loadData will choose a sample at random
+        if tag == 'predict' or (tag == 'valid' and trackBest) then idx = i+1 end
+        if i <= r.iters then nextInput, nextLabel = loadData(set, idx, r.batchsize) end
+
         -- Synchronize with GPU
         if opt.GPU ~= -1 then cutorch.synchronize() end
 
@@ -71,11 +76,11 @@ function step(tag)
         if tag == 'predict' or (tag == 'valid' and trackBest) then
             if type(outputDim[1]) == "table" then
                 -- If we're getting a table of heatmaps, save the last one
-                predHMs:sub(idx,idx+r.batchsize-1):copy(output[#output])
+                predHMs:sub(i,i+r.batchsize-1):copy(output[#output])
             else
-                predHMs:sub(idx,idx+r.batchsize-1):copy(output)
+                predHMs:sub(i,i+r.batchsize-1):copy(output)
             end
-            if postprocess then preds:sub(idx,idx+r.batchsize-1):copy(postprocess(set,idx,output)) end
+            if postprocess then preds:sub(i,i+r.batchsize-1):copy(postprocess(set,i,output)) end
         end
 
         -- Calculate accuracy

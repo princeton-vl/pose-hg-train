@@ -41,6 +41,7 @@ function loadData(set, idx, batchsize)
 
     -- Read data from a provided hdf5 file
     if useHDF5[set] then
+        idx = idx or torch.random(annot[set]['nsamples'] - batchsize)
         local inp_dims = {{idx,idx+batchsize-1}}
         for i = 1,#dataDim do inp_dims[i+1] = {1,dataDim[i]} end
         local label_dims = {{idx,idx+batchsize-1}}
@@ -68,11 +69,15 @@ function loadData(set, idx, batchsize)
         end
     end
 
+    if input:max() > 2 then
+       input:div(255)
+    end
+
     -- Augment data (during training only)
     if not isTesting then
-        local scale_factor = .4
-        local rot_factor = 30
-        local s = torch.rand(batchsize):mul(2*scale_factor):add(1-scale_factor)
+        local scale_factor = .5
+        local rot_factor = 40
+        local s = torch.randn(batchsize):mul(scale_factor):add(1):clamp(1-scale_factor,1+scale_factor)
         local r = torch.rand(batchsize):mul(2*rot_factor + 1):add(-rot_factor - 1)
 
         for i = 1, batchsize do
@@ -82,7 +87,7 @@ function loadData(set, idx, batchsize)
             input[{i, 3, {}, {}}]:mul(torch.uniform(0.8, 1.2)):clamp(0, 1)
 
             -- Scale/rotation
-            if torch.uniform() <= 0 then r[i] = 0 end
+            if torch.uniform() <= .8 then r[i] = 0 end
             local inp,out = opt.inputRes, opt.outputRes
             input[i] = crop(input[i], {(inp+1)/2,(inp+1)/2}, inp*s[i]/200, r[i], inp)
             label[i] = crop(label[i], {(out+1)/2,(out+1)/2}, out*s[i]/200, r[i], out)
