@@ -75,10 +75,8 @@ function loadData(set, idx, batchsize)
 
     -- Augment data (during training only)
     if not isTesting then
-        local scale_factor = .5
-        local rot_factor = 40
-        local s = torch.randn(batchsize):mul(scale_factor):add(1):clamp(1-scale_factor,1+scale_factor)
-        local r = torch.rand(batchsize):mul(2*rot_factor + 1):add(-rot_factor - 1)
+        local s = torch.randn(batchsize):mul(opt.scaleFactor):add(1):clamp(1-opt.scaleFactor,1+opt.scaleFactor)
+        local r = torch.randn(batchsize):mul(opt.rotFactor):clamp(-2*opt.rotFactor,2*opt.rotFactor)
 
         for i = 1, batchsize do
             -- Color
@@ -87,7 +85,7 @@ function loadData(set, idx, batchsize)
             input[{i, 3, {}, {}}]:mul(torch.uniform(0.8, 1.2)):clamp(0, 1)
 
             -- Scale/rotation
-            if torch.uniform() <= .8 then r[i] = 0 end
+            if torch.uniform() <= .6 then r[i] = 0 end
             local inp,out = opt.inputRes, opt.outputRes
             input[i] = crop(input[i], {(inp+1)/2,(inp+1)/2}, inp*s[i]/200, r[i], inp)
             label[i] = crop(label[i], {(out+1)/2,(out+1)/2}, out*s[i]/200, r[i], out)
@@ -105,16 +103,12 @@ function loadData(set, idx, batchsize)
     -- Do task-specific preprocessing
     if preprocess then input,label = preprocess(input,label,batchsize,set,idx) end
 
-    if opt.GPU ~= -1 then
-        -- Convert to CUDA
-        input = applyFn(function (x) return x:cuda() end, input)
-        label = applyFn(function (x) return x:cuda() end, label)
-    end
-
     return input, label
 end
 
 -- Check data preprocessing if there is any
+if not alreadyChecked then
+
 if preprocess then
     print_dims("Original input is a ", dataDim)
     print_dims("Original output is a ", labelDim)
@@ -150,4 +144,6 @@ else
     outputDim = labelDim
     print_dims("Input is a ", inputDim)
     print_dims("Output is a ", outputDim)
+end
+
 end

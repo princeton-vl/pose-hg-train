@@ -2,8 +2,7 @@
 predDim = {nParts,2}
 
 criterion = nn.ParallelCriterion()
-          :add(nn.MSECriterion())
-          :add(nn.MSECriterion())
+for i = 1,opt.nStack do criterion:add(nn.MSECriterion()) end
 
 -- Code to generate training samples from raw images.
 function generateSample(set, idx)
@@ -17,7 +16,7 @@ function generateSample(set, idx)
     local out = torch.zeros(nParts, opt.outputRes, opt.outputRes)
     for i = 1,nParts do
         if pts[i][1] > 0 then -- Checks that there is a ground truth annotation
-            drawGaussian(out[i], transform(torch.add(pts[i],1), c, s, 0, opt.outputRes), 2)
+            drawGaussian(out[i], transform(torch.add(pts[i],1), c, s, 0, opt.outputRes), 1)
         end
     end
 
@@ -25,7 +24,9 @@ function generateSample(set, idx)
 end
 
 function preprocess(input, label)
-    return input, {label,label}
+    newLabel = {}
+    for i = 1,opt.nStack do newLabel[i] = label end
+    return input, newLabel
 end
 
 function postprocess(set, idx, output)

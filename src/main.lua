@@ -4,6 +4,10 @@ paths.dofile('data.lua')    -- Set up data processing
 paths.dofile('model.lua')   -- Read in network model
 paths.dofile('train.lua')   -- Load up training/testing functions
 
+torch.setnumthreads(1)
+local Dataloader = require 'dataloader'
+loader = Dataloader.create(opt)
+
 isFinished = false -- Finish early if validation accuracy plateaus, can be adjusted with opt.threshold
 
 -- Main training loop

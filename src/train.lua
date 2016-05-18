@@ -18,8 +18,9 @@ param, gradparam = model:getParameters()
 -- Main processing step
 function step(tag)
     local avgLoss, avgAcc = 0.0, 0.0
+    local output, err, idx
     local r = ref[tag]
-    local idx
+    local function evalFn(x) return criterion.output, gradparam end
 
     if tag == 'train' then
         print("==> Starting epoch: " .. epoch .. "/" .. (opt.nEpochs + opt.epochNumber - 1))
@@ -33,14 +34,16 @@ function step(tag)
         isTesting = true
     end
 
-    if tag == 'predict' or (tag == 'valid' and trackBest) then idx = 1 end
-    local nextInput, nextLabel = loadData(set, nextIdx, r.batchsize)
-
-    for i=1,r.iters do
-        collectgarbage()
+    for i,sample in loader[set]:run() do
 
         xlua.progress(i, r.iters)
-        local input, label = nextInput, nextLabel
+        local input, label = unpack(sample)
+
+        if opt.GPU ~= -1 then
+            -- Convert to CUDA
+            input = applyFn(function (x) return x:cuda() end, input)
+            label = applyFn(function (x) return x:cuda() end, label)
+        end
 
         -- Do a forward pass and calculate loss
         local output = model:forward(input)
@@ -50,7 +53,6 @@ function step(tag)
         if tag == 'train' then
             model:zeroGradParameters()
             model:backward(input, criterion:backward(output, label))
-            local function evalFn(x) return err, gradparam end
             optfn(evalFn, param, optimState)
 
         -- Validation: Get flipped output
@@ -63,11 +65,6 @@ function step(tag)
             output = applyFn(function (x,y) return x:add(y):div(2) end, output, flippedOut)
 
         end
-
-        -- Load up next sample, runs simultaneously with GPU
-        -- If idx is nil, loadData will choose a sample at random
-        if tag == 'predict' or (tag == 'valid' and trackBest) then idx = i+1 end
-        if i <= r.iters then nextInput, nextLabel = loadData(set, idx, r.batchsize) end
 
         -- Synchronize with GPU
         if opt.GPU ~= -1 then cutorch.synchronize() end
