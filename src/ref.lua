@@ -98,16 +98,6 @@ torch.save(opt.save .. '/options.t7', opt)
 
 end
 
-if opt.GPU == -1 then
-    nnlib = nn
-else
-    require 'cutorch'
-    require 'cunn'
-    require 'cudnn'
-    nnlib = cudnn
-    cutorch.setDevice(opt.GPU)
-end
-
 -------------------------------------------------------------------------------
 -- Load in annotations
 -------------------------------------------------------------------------------
