@@ -6,7 +6,10 @@ paths.dofile('train.lua')   -- Load up training/testing functions
 
 torch.setnumthreads(1)
 local Dataloader = require 'dataloader'
-loader = Dataloader.create(opt)
+loader = Dataloader.create(opt, annot, ref)
+
+ref.train.log = Logger(paths.concat(opt.save, 'train.log'), opt.continue)
+ref.valid.log = Logger(paths.concat(opt.save, 'valid.log'), opt.continue)
 
 isFinished = false -- Finish early if validation accuracy plateaus, can be adjusted with opt.threshold
 

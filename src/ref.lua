@@ -98,19 +98,11 @@ torch.save(opt.save .. '/options.t7', opt)
 
 end
 
-if opt.GPU == -1 then
-    nnlib = nn
-else
-    require 'cutorch'
-    require 'cunn'
-    require 'cudnn'
-    nnlib = cudnn
-    cutorch.setDevice(opt.GPU)
-end
-
 -------------------------------------------------------------------------------
 -- Load in annotations
 -------------------------------------------------------------------------------
+
+if not annot then
 
 annotLabels = {'train', 'valid'}
 annot,ref = {},{}
@@ -150,7 +142,6 @@ for _,l in ipairs(annotLabels) do
     ref[l].nsamples = annot[l]['nsamples']
     ref[l].iters = opt[l .. 'Iters']
     ref[l].batchsize = opt[l .. 'Batch']
-    ref[l].log = Logger(paths.concat(opt.save, l .. '.log'), opt.continue)
 end
 
 ref.predict = {}
@@ -158,9 +149,11 @@ ref.predict.nsamples = annot.valid.nsamples
 ref.predict.iters = annot.valid.nsamples
 ref.predict.batchsize = 1
 
+end
+
 -- Default input is assumed to be an image and output is assumed to be a heatmap
 -- This can change if an hdf5 file is used, or if opt.task specifies something different
-nParts = annot['train']['part']:size(2)
+nParts = annot.train.part:size(2)
 dataDim = {3, opt.inputRes, opt.inputRes}
 labelDim = {nParts, opt.outputRes, opt.outputRes}
 

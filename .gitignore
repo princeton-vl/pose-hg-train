@@ -3,3 +3,4 @@
 *.pyc
 exp/
 data/**/images
+src/models/old

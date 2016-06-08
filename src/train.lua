@@ -34,10 +34,11 @@ function step(tag)
         isTesting = true
     end
 
+    if r.iters > 0 then
     for i,sample in loader[set]:run() do
 
         xlua.progress(i, r.iters)
-        local input, label = unpack(sample)
+        local input, label, idx = unpack(sample)
 
         if opt.GPU ~= -1 then
             -- Convert to CUDA
@@ -73,17 +74,18 @@ function step(tag)
         if tag == 'predict' or (tag == 'valid' and trackBest) then
             if type(outputDim[1]) == "table" then
                 -- If we're getting a table of heatmaps, save the last one
-                predHMs:sub(i,i+r.batchsize-1):copy(output[#output])
+                predHMs:sub(idx,idx+r.batchsize-1):copy(output[#output])
             else
-                predHMs:sub(i,i+r.batchsize-1):copy(output)
+                predHMs:sub(idx,idx+r.batchsize-1):copy(output)
             end
-            if postprocess then preds:sub(i,i+r.batchsize-1):copy(postprocess(set,i,output)) end
+            if postprocess then preds:sub(idx,idx+r.batchsize-1):copy(postprocess(set,idx,output)) end
         end
 
         -- Calculate accuracy
         local acc = accuracy(output, label)
         avgLoss = avgLoss + err
         avgAcc = avgAcc + acc
+    end
     end
 
     avgLoss = avgLoss / r.iters

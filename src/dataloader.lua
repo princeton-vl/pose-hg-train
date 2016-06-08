@@ -15,20 +15,24 @@ Threads.serialization('threads.sharedserialize')
 local M = {}
 local DataLoader = torch.class('resnet.DataLoader', M)
 
-function DataLoader.create(opt)
+function DataLoader.create(opt, annot, ref)
    -- The train and valid loader
    local loaders = {}
 
    for i, split in ipairs{'train', 'valid'} do
-      loaders[split] = M.DataLoader(opt, split)
+      if opt[split .. 'Iters'] > 0 then
+         loaders[split] = M.DataLoader(opt, annot, ref, split)
+      end
    end
 
    return loaders
 end
 
-function DataLoader:__init(opt, split)
+function DataLoader:__init(opt, annot, ref, split)
    local function init()
          _G.opt = opt
+         _G.annot = annot
+         _G.ref = ref
          _G.split = split
          _G.alreadyChecked = true
          paths.dofile('ref.lua')
@@ -37,7 +41,10 @@ function DataLoader:__init(opt, split)
 
    local function main(idx)
       torch.setnumthreads(1)
-      if split == 'valid' then _G.isTesting = true end
+      if split == 'valid' then 
+         _G.isTesting = true
+         if opt.finalPredictions == 1 then return annot.valid.nsamples end
+      end
       return opt[split .. 'Iters']*opt[split .. 'Batch']
    end
 
@@ -67,7 +74,7 @@ function DataLoader:run()
                if _G.isTesting then idx_ = idx end
                local inp,out = _G.loadData(_G.split, idx_, batchsize)
                collectgarbage()
-               return {inp,out}
+               return {inp,out,idx}
             end,
 
             function(_sample_)

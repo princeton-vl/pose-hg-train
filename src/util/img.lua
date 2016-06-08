@@ -217,13 +217,6 @@ end
 
 function shuffleLR(x)
     local dim
-    if x:nDimension() == 4 then
-        dim = 2
-    else
-        assert(x:nDimension() == 3)
-        dim = 1
-    end
-
     local matchedParts
     if opt.dataset == 'mpii' then
         matchedParts = {
@@ -231,13 +224,20 @@ function shuffleLR(x)
             {11,16}, {12,15}, {13,14}
         }
     elseif opt.dataset == 'flic' then
-        matched_parts = {
+        matchedParts = {
             {1,4}, {2,5}, {3,6}, {7,8}, {9,10}
         }
     elseif opt.dataset == 'lsp' then
-        matched_parts = {
+        matchedParts = {
             {1,6}, {2,5}, {3,4}, {7,12}, {8,11}, {9,10}
         }
+    end
+
+    if x:nDimension() == 4 or x:nDimension() == 2 then
+        dim = 2
+    else
+        assert(x:nDimension() == 3 or x:nDimension() == 1)
+        dim = 1
     end
 
     for i = 1,#matchedParts do

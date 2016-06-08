@@ -2,17 +2,22 @@ paths.dofile('layers/Residual.lua')
 
 local function hourglass(n, f, inp)
     -- Upper branch
-    local up1 = Residual(f,f)(inp)
+    local up1 = inp
+    for i = 1,opt.nModules do up1 = Residual(f,f)(up1) end
 
     -- Lower branch
-    local pool = nnlib.SpatialMaxPooling(2,2,2,2)(inp)
-    local low1 = Residual(f,f)(pool)
+    local low1 = nnlib.SpatialMaxPooling(2,2,2,2)(inp)
+    for i = 1,opt.nModules do low1 = Residual(f,f)(low1) end
     local low2
 
     if n > 1 then low2 = hourglass(n-1,f,low1)
-    else low2 = Residual(f,f)(low1) end
+    else
+        low2 = low1
+        for i = 1,opt.nModules do low2 = Residual(f,f)(low2) end
+    end
 
-    local low3 = Residual(f,f)(low2)
+    local low3 = low2
+    for i = 1,opt.nModules do low3 = Residual(f,f)(low3) end
     local up2 = nn.SpatialUpSamplingNearest(2)(low3)
 
     -- Bring two branches together
@@ -44,13 +49,19 @@ function createModel()
         local hg = hourglass(4,opt.nFeats,inter)
 
         -- Linear layer to produce first set of predictions
-        local ll = lin(opt.nFeats,opt.nFeats,hg)
+        local ll = hg
+        for j = 1,opt.nModules do ll = lin(opt.nFeats,opt.nFeats,ll) end
 
         -- Predicted heatmaps
-        local tmpOut = nnlib.SpatialConvolution(opt.nFeats,outputDim[1][1],1,1,1,1,0,0)(ll)
+        local tmpOut = nnlib.SpatialConvolution(opt.nFeats,nParts,1,1,1,1,0,0)(ll)
         table.insert(out,tmpOut)
 
-        if i < opt.nStack then inter = nn.CAddTable()({inter, hg}) end
+        if i < opt.nStack then
+            -- Add predictions back
+            local ll_ = nnlib.SpatialConvolution(opt.nFeats,opt.nFeats,1,1,1,1,0,0)(ll)
+            local tmpOut_ = nnlib.SpatialConvolution(nParts,opt.nFeats,1,1,1,1,0,0)(tmpOut)
+            inter = nn.CAddTable()({inter, ll_, tmpOut_})
+        end
     end
 
     -- Final model

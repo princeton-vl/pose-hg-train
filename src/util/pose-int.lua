@@ -24,17 +24,42 @@ function generateSample(set, idx)
 end
 
 function preprocess(input, label)
-    newLabel = {}
-    for i = 1,opt.nStack do newLabel[i] = label end
-    return input, newLabel
+    if opt.nStack > 1 then
+        local newLabel = {}
+        for i = 1,opt.nStack do newLabel[i] = label end
+        return input,newLabel
+    else
+        return input,label
+    end
 end
 
 function postprocess(set, idx, output)
-    local preds = getPreds(output[#output])
-    return preds
+    local p,tmpOutput
+    if opt.nStack > 1 then tmpOutput = output[#output]
+    else tmpOutput = output end
+    p = getPreds(tmpOutput)
+
+    -- Very simple post-processing step to improve performance at tight PCK thresholds
+    for i = 1,p:size(1) do
+        for j = 1,p:size(2) do
+            local hm = tmpOutput[i][j]
+            local pX,pY = p[i][j][1], p[i][j][2]
+            if pX > 1 and pX < opt.outputRes and pY > 1 and pY < opt.outputRes then
+               local diff = torch.Tensor({hm[pY][pX+1]-hm[pY][pX-1], hm[pY+1][pX]-hm[pY-1][pX]})
+               p[i][j]:add(diff:sign():mul(.25))
+            end
+        end
+    end
+    p:add(-0.5)
+    
+    return p           
 end
 
 function accuracy(output,label)
     local jntIdxs = {mpii={1,2,3,4,5,6,11,12,15,16},flic={2,3,5,6,7,8}}
-    return heatmapAccuracy(output[#output],label[#output],nil,jntIdxs[opt.dataset])
+    if opt.nStack > 1 then
+        return heatmapAccuracy(output[#output],label[#output],nil,jntIdxs[opt.dataset])
+    else
+        return heatmapAccuracy(output,label,nil,jntIdxs[opt.dataset])
+    end
 end

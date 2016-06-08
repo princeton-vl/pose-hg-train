@@ -38,6 +38,7 @@ end
 function loadData(set, idx, batchsize)
     -- Load in a mini-batch of data
     local input,label
+    local idxs = {}
 
     -- Read data from a provided hdf5 file
     if useHDF5[set] then
@@ -65,6 +66,7 @@ function loadData(set, idx, batchsize)
         for i = 1, batchsize do
             idx_ = idx or torch.random(annot[set]['nsamples'])
             idx_ = (idx_ + i - 2) % annot[set]['nsamples'] + 1
+            table.insert(idxs, idx_)
             input[i],label[i] = generateSample(set, idx_)
         end
     end
@@ -101,7 +103,7 @@ function loadData(set, idx, batchsize)
     end
 
     -- Do task-specific preprocessing
-    if preprocess then input,label = preprocess(input,label,batchsize,set,idx) end
+    if preprocess then input,label = preprocess(input,label,batchsize,set,idxs) end
 
     return input, label
 end
