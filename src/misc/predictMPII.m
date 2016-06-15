@@ -1,5 +1,5 @@
 
-load('../../data/mpii/annot.mat');
+load('../../data/mpii/annot/mpii_human_pose_v1_u12_1.mat');
 imgname = h5read('../../data/mpii/annot/test.h5', '/imgname');
 index = h5read('../../data/mpii/annot/test.h5', '/index') + 1;
 person = h5read('../../data/mpii/annot/test.h5', '/person') + 1;
