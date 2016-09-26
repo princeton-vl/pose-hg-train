@@ -1,43 +1,39 @@
--- Track accuracy
-opt.lastAcc = opt.lastAcc or 0
-opt.bestAcc = opt.bestAcc or 0
--- We save snapshots of the best model only when evaluating on the full validation set
-trackBest = (opt.validIters * opt.validBatch == ref.valid.nsamples)
-
--- The dimensions of 'final predictions' are defined by the opt.task file
--- This allows some flexibility for post-processing of the network output
-preds = torch.Tensor(ref.valid.nsamples, unpack(predDim))
-
--- We also save the raw output of the network (in this case heatmaps)
-if type(outputDim[1]) == "table" then predHMs = torch.Tensor(ref.valid.nsamples, unpack(outputDim[#outputDim]))
-else predHMs = torch.Tensor(ref.valid.nsamples, unpack(outputDim)) end
-
--- Model parameters
-param, gradparam = model:getParameters()
+-- Prepare tensors for saving network output
+local validSamples = opt.validIters * opt.validBatch
+saved = {idxs = torch.Tensor(validSamples),
+         preds = torch.Tensor(validSamples, unpack(ref.predDim))}
+if opt.saveInput then saved.input = torch.Tensor(validSamples, unpack(ref.inputDim)) end
+if opt.saveHeatmaps then saved.heatmaps = torch.Tensor(validSamples, unpack(ref.outputDim[1])) end
 
 -- Main processing step
 function step(tag)
     local avgLoss, avgAcc = 0.0, 0.0
     local output, err, idx
-    local r = ref[tag]
+    local param, gradparam = model:getParameters()
     local function evalFn(x) return criterion.output, gradparam end
 
     if tag == 'train' then
-        print("==> Starting epoch: " .. epoch .. "/" .. (opt.nEpochs + opt.epochNumber - 1))
         model:training()
         set = 'train'
-        isTesting = false -- Global flag
     else
-        if tag == 'predict' then print("==> Generating predictions...") end
         model:evaluate()
-        set = 'valid'
-        isTesting = true
+        if tag == 'predict' then
+            print("==> Generating predictions...")
+            local nSamples = dataset:size('test')
+            saved = {idxs = torch.Tensor(nSamples),
+                     preds = torch.Tensor(nSamples, unpack(ref.predDim))}
+            if opt.saveInput then saved.input = torch.Tensor(nSamples, unpack(ref.inputDim)) end
+            if opt.saveHeatmaps then saved.heatmaps = torch.Tensor(nSamples, unpack(ref.outputDim[1])) end
+            set = 'test'
+        else
+            set = 'valid'
+        end
     end
 
+    local nIters = opt[set .. 'Iters']
     for i,sample in loader[set]:run() do
-
-        xlua.progress(i, r.iters)
-        local input, label = unpack(sample)
+        xlua.progress(i, nIters)
+        local input, label, indices = unpack(sample)
 
         if opt.GPU ~= -1 then
             -- Convert to CUDA
@@ -48,59 +44,41 @@ function step(tag)
         -- Do a forward pass and calculate loss
         local output = model:forward(input)
         local err = criterion:forward(output, label)
+        avgLoss = avgLoss + err / nIters
 
-        -- Training: Do backpropagation and optimization
         if tag == 'train' then
+            -- Training: Do backpropagation and optimization
             model:zeroGradParameters()
             model:backward(input, criterion:backward(output, label))
             optfn(evalFn, param, optimState)
-
-        -- Validation: Get flipped output
         else
+            -- Validation: Get flipped output
             output = applyFn(function (x) return x:clone() end, output)
-            local flip_ = customFlip or flip
-            local shuffleLR_ = customShuffleLR or shuffleLR
-            local flippedOut = model:forward(flip_(input))
-            flippedOut = applyFn(function (x) return flip_(shuffleLR_(x)) end, flippedOut)
+            local flippedOut = model:forward(flip(input))
+            flippedOut = applyFn(function (x) return flip(shuffleLR(x)) end, flippedOut)
             output = applyFn(function (x,y) return x:add(y):div(2) end, output, flippedOut)
 
-        end
-
-        -- Synchronize with GPU
-        if opt.GPU ~= -1 then cutorch.synchronize() end
-
-        -- If we're generating predictions, save output
-        if tag == 'predict' or (tag == 'valid' and trackBest) then
-            if type(outputDim[1]) == "table" then
-                -- If we're getting a table of heatmaps, save the last one
-                predHMs:sub(i,i+r.batchsize-1):copy(output[#output])
-            else
-                predHMs:sub(i,i+r.batchsize-1):copy(output)
-            end
-            if postprocess then preds:sub(i,i+r.batchsize-1):copy(postprocess(set,i,output)) end
+            -- Save sample
+            local bs = opt[set .. 'Batch']
+            local tmpIdx = (i-1) * bs + 1
+            local tmpOut = output
+            if type(tmpOut) == 'table' then tmpOut = output[#output] end
+            if opt.saveInput then saved.input:sub(tmpIdx, tmpIdx+bs-1):copy(input) end
+            if opt.saveHeatmaps then saved.heatmaps:sub(tmpIdx, tmpIdx+bs-1):copy(tmpOut) end
+            saved.idxs:sub(tmpIdx, tmpIdx+bs-1):copy(indices)
+            saved.preds:sub(tmpIdx, tmpIdx+bs-1):copy(postprocess(set,indices,output))
         end
 
         -- Calculate accuracy
-        local acc = accuracy(output, label)
-        avgLoss = avgLoss + err
-        avgAcc = avgAcc + acc
+        avgAcc = avgAcc + accuracy(output, label) / nIters
     end
 
-    avgLoss = avgLoss / r.iters
-    avgAcc = avgAcc / r.iters
 
-    local epochStep = torch.floor(ref.train.nsamples / (r.iters * r.batchsize * 2))
-    if tag == 'train' and epoch % epochStep == 0 then
-        if avgAcc - opt.lastAcc < opt.threshold then
-            isFinished = true --Training has plateaued
-        end
-        opt.lastAcc = avgAcc
-    end
-
-    -- Print and log some useful performance metrics
+    -- Print and log some useful metrics
     print(string.format("      %s : Loss: %.7f Acc: %.4f"  % {set, avgLoss, avgAcc}))
-    if r.log then
-        r.log:add{
+    if ref.log[set] then
+        table.insert(opt.acc[set], avgAcc)
+        ref.log[set]:add{
             ['epoch     '] = string.format("%d" % epoch),
             ['loss      '] = string.format("%.6f" % avgLoss),
             ['acc       '] = string.format("%.4f" % avgAcc),
@@ -108,26 +86,16 @@ function step(tag)
         }
     end
 
-    if tag == 'train' and opt.snapshot ~= 0 and epoch % opt.snapshot == 0 then
-        -- Take an intermediate training snapshot
+    if (tag == 'valid' and opt.snapshot ~= 0 and epoch % opt.snapshot == 0) or tag == 'predict' then
+        -- Take a snapshot
         model:clearState()
+        torch.save(paths.concat(opt.save, 'options.t7'), opt)
+        torch.save(paths.concat(opt.save, 'optimState.t7'), optimState)
         torch.save(paths.concat(opt.save, 'model_' .. epoch .. '.t7'), model)
-        torch.save(paths.concat(opt.save, 'optimState.t7'), optimState)
-    elseif tag == 'valid' and trackBest and avgAcc > opt.bestAcc then
-        -- A new record validation accuracy has been hit, save the model and predictions
-        predFile = hdf5.open(opt.save .. '/best_preds.h5', 'w')
-        predFile:write('heatmaps', predHMs)
-        if postprocess then predFile:write('preds', preds) end
-        predFile:close()
-        model:clearState()
-        torch.save(paths.concat(opt.save, 'best_model.t7'), model)
-        torch.save(paths.concat(opt.save, 'optimState.t7'), optimState)
-        opt.bestAcc = avgAcc
-    elseif tag == 'predict' then
-        -- Save final predictions
-        predFile = hdf5.open(opt.save .. '/preds.h5', 'w')
-        predFile:write('heatmaps', predHMs)
-        if postprocess then predFile:write('preds', preds) end
+        local predFilename = 'preds.h5'
+        if tag == 'predict' then predFilename = 'final_' .. predFilename end
+        local predFile = hdf5.open(paths.concat(opt.save,predFilename),'w')
+        for k,v in pairs(saved) do predFile:write(k,v) end
         predFile:close()
     end
 end

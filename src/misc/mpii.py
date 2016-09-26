@@ -43,7 +43,10 @@ def istrain(idx):
 def location(idx, person):
     # Return center of person, and scale factor
     example = annot['annolist'][0][0][0]['annorect'][idx]
-    if example['scale'][0][person].size > 0 and example['objpos'][0][person].size > 0:
+    if ((not example.dtype.fields is None) and
+        'scale' in example.dtype.fields and
+        example['scale'][0][person].size > 0 and
+        example['objpos'][0][person].size > 0):
         scale = example['scale'][0][person][0][0]
         x = example['objpos'][0][person][0][0]['x'][0][0]
         y = example['objpos'][0][person][0][0]['y'][0][0]

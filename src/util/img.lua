@@ -1,3 +1,16 @@
+function applyFn(fn, t, t2)
+    -- Apply an operation whether passed a table or tensor
+    local t_ = {}
+    if type(t) == "table" then
+        if t2 then
+            for i = 1,#t do t_[i] = applyFn(fn, t[i], t2[i]) end
+        else
+            for i = 1,#t do t_[i] = applyFn(fn, t[i]) end
+        end
+    else t_ = fn(t, t2) end
+    return t_
+end
+
 -------------------------------------------------------------------------------
 -- Coordinate transformation
 -------------------------------------------------------------------------------
@@ -51,14 +64,33 @@ function transform(pt, center, scale, rot, res, invert)
     return new_point:int():add(1)
 end
 
+function transformPreds(coords, center, scale, res)
+    local origDims = coords:size()
+    coords = coords:view(-1,2)
+    local newCoords = coords:clone()
+    for i = 1,coords:size(1) do
+        newCoords[i] = transform(coords[i], center, scale, 0, res, 1)
+    end
+    return newCoords:view(origDims)
+end
+
 -------------------------------------------------------------------------------
 -- Cropping
 -------------------------------------------------------------------------------
 
 function crop(img, center, scale, rot, res)
-    local ul = transform({1,1}, center, scale, 0, res, true)
-    local br = transform({res+1,res+1}, center, scale, 0, res, true)
+    local ndim = img:nDimension()
+    if ndim == 2 then img = img:view(1,img:size(1),img:size(2)) end
+    local ht,wd = img:size(2), img:size(3)
+    local tmpImg = img
+    local scaleFactor = (200 * scale) / res
+    if scaleFactor < 2 then scaleFactor = 1
+    else tmpImg = image.scale(img,math.ceil(math.max(ht,wd) / scaleFactor)) end
 
+    ht,wd = tmpImg:size(2),tmpImg:size(3)
+    local c,s = center:float()/scaleFactor, scale/scaleFactor
+    local ul = transform({1,1}, c, s, 0, res, true)
+    local br = transform({res+1,res+1}, c, s, 0, res, true)
 
     local pad = math.floor(torch.norm((ul - br):float())/2 - (br[1]-ul[1])/2)
     if rot ~= 0 then
@@ -66,45 +98,25 @@ function crop(img, center, scale, rot, res)
         br = br + pad
     end
 
-    local newDim,newImg,ht,wd
-
-    if img:size():size() > 2 then
-        newDim = torch.IntTensor({img:size(1), br[2] - ul[2], br[1] - ul[1]})
-        newImg = torch.zeros(newDim[1],newDim[2],newDim[3])
-        ht = img:size(2)
-        wd = img:size(3)
-    else
-        newDim = torch.IntTensor({br[2] - ul[2], br[1] - ul[1]})
-        newImg = torch.zeros(newDim[1],newDim[2])
-        ht = img:size(1)
-        wd = img:size(2)
-    end
-
-    local newX = torch.Tensor({math.max(1, -ul[1] + 2), math.min(br[1], wd+1) - ul[1]})
-    local newY = torch.Tensor({math.max(1, -ul[2] + 2), math.min(br[2], ht+1) - ul[2]})
-    local oldX = torch.Tensor({math.max(1, ul[1]), math.min(br[1], wd+1) - 1})
-    local oldY = torch.Tensor({math.max(1, ul[2]), math.min(br[2], ht+1) - 1})
-
-    if newDim:size(1) > 2 then
-        newImg:sub(1,newDim[1],newY[1],newY[2],newX[1],newX[2]):copy(img:sub(1,newDim[1],oldY[1],oldY[2],oldX[1],oldX[2]))
-    else
-        newImg:sub(newY[1],newY[2],newX[1],newX[2]):copy(img:sub(oldY[1],oldY[2],oldX[1],oldX[2]))
-    end
+    local new_ = {1,-1,math.max(1, -ul[2] + 2), math.min(br[2], ht+1) - ul[2],
+                       math.max(1, -ul[1] + 2), math.min(br[1], wd+1) - ul[1]}
+    local old_ = {1,-1,math.max(1, ul[2]), math.min(br[2], ht+1) - 1,
+                       math.max(1, ul[1]), math.min(br[1], wd+1) - 1}
+    local newImg = torch.zeros(img:size(1), br[2] - ul[2] + 1, br[1] - ul[1] + 1)
+    if rot == 0 and scaleFactor > 2 then newImg = torch.zeros(img:size(1),res,res) end
+    newImg:sub(unpack(new_)):copy(tmpImg:sub(unpack(old_)))
 
     if rot ~= 0 then
         newImg = image.rotate(newImg, rot * math.pi / 180, 'bilinear')
-        if newDim:size(1) > 2 then
-            newImg = newImg:sub(1,newDim[1],pad,newDim[2]-pad,pad,newDim[3]-pad)
-        else
-            newImg = newImg:sub(pad,newDim[1]-pad,pad,newDim[2]-pad)
-        end
+        newImg = newImg:sub(1,-1,pad,newImg:size(2)-pad,pad,newImg:size(3)-pad)
     end
 
     newImg = image.scale(newImg,res,res)
+    if ndim == 2 then newImg = newImg:view(newImg:size(2),newImg:size(3)) end
     return newImg
 end
 
-function two_point_crop(img, s, pt1, pt2, pad, res)
+function twoPointCrop(img, s, pt1, pt2, pad, res)
     local center = (pt1 + pt2) / 2
     local scale = math.max(20*s,torch.norm(pt1 - pt2)) * .007
     scale = scale * pad
@@ -116,28 +128,28 @@ end
 -- Non-maximum Suppression
 -------------------------------------------------------------------------------
 
--- Set up max network for NMS
-nms_window_size = 3
-nms_pad = (nms_window_size - 1)/2
-maxlayer = nn.Sequential()
-if cudnn then
-    maxlayer:add(cudnn.SpatialMaxPooling(nms_window_size, nms_window_size,1,1, nms_pad, nms_pad))
-    maxlayer:cuda()
-else
-    maxlayer:add(nn.SpatialMaxPooling(nms_window_size, nms_window_size,1,1, nms_pad,nms_pad))
-end
-maxlayer:evaluate()
+function localMaxes(hm, n, c, s, hmIdx, nmsWindowSize)
+    -- Set up max network for NMS
+    local nmsWindowSize = nmsWindowSize or 3
+    local nmsPad = (nmsWindowSize - 1)/2
+    local maxlayer = nn.Sequential()
+    if cudnn then
+        maxlayer:add(cudnn.SpatialMaxPooling(nmsWindowSize, nmsWindowSize,1,1, nmsPad, nmsPad))
+        maxlayer:cuda()
+    else
+        maxlayer:add(nn.SpatialMaxPooling(nmsWindowSize, nmsWindowSize,1,1, nmsPad,nmsPad))
+        maxlayer:float()
+    end
+    maxlayer:evaluate()
 
-function local_maxes(hm, n, c, s, hm_idx)
-    hm = torch.Tensor(1,16,64,64):copy(hm):float()
-    if hm_idx then hm = hm:sub(1,-1,hm_idx,hm_idx) end
-    local hm_dim = hm:size()
+    local hmSize = torch.totable(hm:size())
+    hm = torch.Tensor(1,unpack(hmSize)):copy(hm):float()
+    if hmIdx then hm = hm:sub(1,-1,hmIdx,hmIdx) end
+    local hmDim = hm:size()
     local max_out
     -- First do nms
     if cudnn then
-        local hmCuda = torch.CudaTensor(1, hm_dim[2], hm_dim[3], hm_dim[4])
-        hmCuda:copy(hm)
-        max_out = maxlayer:forward(hmCuda)
+        max_out = maxlayer:forward(hm:cuda())
         cutorch.synchronize()
     else
         max_out = maxlayer:forward(hm)
@@ -145,18 +157,22 @@ function local_maxes(hm, n, c, s, hm_idx)
 
     local nms = torch.cmul(hm, torch.eq(hm, max_out:float()):float())[1]
     -- Loop through each heatmap retrieving top n locations, and their scores
-    local pred_coords = torch.Tensor(hm_dim[2], n, 2)
-    local pred_scores = torch.Tensor(hm_dim[2], n)
-    for i = 1, hm_dim[2] do
+    local predCoords = torch.Tensor(hmDim[2], n, 2)
+    local predScores = torch.Tensor(hmDim[2], n)
+    for i = 1, hmDim[2] do
         local nms_flat = nms[i]:view(nms[i]:nElement())
         local vals,idxs = torch.sort(nms_flat,1,true)
         for j = 1,n do
-            local pt = {idxs[j] % 64, torch.ceil(idxs[j] / 64) }
-            pred_coords[i][j] = transform(pt, c, s, 0, 64, true)
-            pred_scores[i][j] = vals[j]
+            local pt = {(idxs[j]-1) % hmSize[3] + 1, math.floor((idxs[j]-1) / hmSize[3]) + 1 }
+            if c then
+                predCoords[i][j] = transform(pt, c, s, 0, hmSize[#hmSize], true)
+            else
+                predCoords[i][j] = torch.Tensor(pt)
+            end
+            predScores[i][j] = vals[j]
         end
     end
-    return pred_coords, pred_scores
+    return predCoords, predScores
 end
 
 -------------------------------------------------------------------------------
@@ -185,30 +201,78 @@ function drawGaussian(img, pt, sigma)
     return img
 end
 
-function drawLine(img,pt1,pt2,width,val,doGauss)
-    val = val or 1
-    doGauss = doGauss or 1
-    pt1 = torch.Tensor(pt1)
-    pt2 = torch.Tensor(pt2)
-    m = torch.dist(pt1,pt2)
+function drawLine(img, pt1, pt2, width, color)
+    if img:nDimension() == 2 then img = img:view(1,img:size(1),img:size(2)) end
+    local nChannels = img:size(1)
+    color = color or torch.ones(nChannels)
+    if type(pt1) == 'table' then pt1 = torch.Tensor(pt1) end
+    if type(pt2) == 'table' then pt2 = torch.Tensor(pt2) end
+
+    m = pt1:dist(pt2)
     dy = (pt2[2] - pt1[2])/m
     dx = (pt2[1] - pt1[1])/m
     for j = 1,width do
-        start_pt1 = torch.Tensor({pt1[1] + (-width/2 + j-1)*dy,
-                                  pt1[2] - (-width/2 + j-1)*dx})
+        start_pt1 = torch.Tensor({pt1[1] + (-width/2 + j-1)*dy, pt1[2] - (-width/2 + j-1)*dx})
         start_pt1:ceil()
         for i = 1,torch.ceil(m) do
             y_idx = torch.ceil(start_pt1[2]+dy*i)
             x_idx = torch.ceil(start_pt1[1]+dx*i)
-            if doGauss == 1 and j == torch.ceil(width/2) and (i == 1 or i == torch.ceil(m)) then
-                img = drawGaussian(img, {x_idx,y_idx}, width/3)
+            if y_idx - 1 > 0 and x_idx -1 > 0 
+            and y_idx < img:size(2) and x_idx < img:size(3) then
+                for j = 1,nChannels do img[j]:sub(y_idx-1,y_idx,x_idx-1,x_idx):fill(color[j]) end
             end
-            if y_idx - 1 > 0 and x_idx -1 > 0 and y_idx < img:size(1) and x_idx < img:size(2) then
-                img:sub(y_idx-1,y_idx,x_idx-1,x_idx):fill(val)
-            end
-        end 
+        end
     end
-    img[img:gt(1)] = 1
+end
+
+function drawSkeleton(img, preds, scores)
+    preds = preds:clone():add(1) -- Account for 1-indexing in lua
+    local pairRef = dataset.skeletonRef
+    local actThresh = 0.05
+    -- Loop through adjacent joint pairings
+    for i = 1,#pairRef do
+        if scores[pairRef[i][1]] > actThresh and scores[pairRef[i][2]] > actThresh then
+            -- Set appropriate line color
+            local color
+            if pairRef[i][3] == 1 then color = {0,.3,1}
+            elseif pairRef[i][3] == 2 then color = {1,.3,0}
+            elseif pairRef[i][3] == 3 then color = {0,0,1}
+            elseif pairRef[i][3] == 4 then color = {1,0,0}
+            else color = {.7,0,.7} end
+            -- Draw line
+            drawLine(img, preds[pairRef[i][1]], preds[pairRef[i][2]], 4, color, 0)
+        end
+    end
+    return img
+end
+
+function heatmapVisualization(set, idx, pred, inp, gt)
+    local set = set or 'valid'
+    local hmImg
+    local tmpInp,tmpHm
+    if not inp then
+        inp, gt = loadData(set,{idx})
+        inp = inp[1]
+        gt = gt[1][1]
+        tmpInp,tmpHm = inp,gt
+    else
+        tmpInp = inp
+        tmpHm = gt or pred
+    end
+    local nOut,res = tmpHm:size(1),tmpHm:size(3)
+    -- Repeat input image, and darken it to overlay heatmaps
+    tmpInp = image.scale(tmpInp,res):mul(.3)
+    tmpInp[1][1][1] = 1
+    hmImg = tmpInp:repeatTensor(nOut,1,1,1)
+    if gt then -- Copy ground truth heatmaps to red channel
+        hmImg:sub(1,-1,1,1):add(gt:clone():mul(.7))
+    end
+    if pred then -- Copy predicted heatmaps to blue channel
+        hmImg:sub(1,-1,3,3):add(pred:clone():mul(.7))
+    end
+    -- Rescale so it is a little easier to see
+    hmImg = image.scale(hmImg:view(nOut*3,res,res),256):view(nOut,3,256,256)
+    return hmImg, inp
 end
 
 -------------------------------------------------------------------------------
@@ -217,27 +281,12 @@ end
 
 function shuffleLR(x)
     local dim
-    if x:nDimension() == 4 then
+    local matchedParts = dataset.flipRef
+    if x:nDimension() == 4 or x:nDimension() == 2 then
         dim = 2
     else
-        assert(x:nDimension() == 3)
+        assert(x:nDimension() == 3 or x:nDimension() == 1)
         dim = 1
-    end
-
-    local matchedParts
-    if opt.dataset == 'mpii' then
-        matchedParts = {
-            {1,6},   {2,5},   {3,4},
-            {11,16}, {12,15}, {13,14}
-        }
-    elseif opt.dataset == 'flic' then
-        matched_parts = {
-            {1,4}, {2,5}, {3,6}, {7,8}, {9,10}
-        }
-    elseif opt.dataset == 'lsp' then
-        matched_parts = {
-            {1,6}, {2,5}, {3,4}, {7,12}, {8,11}, {9,10}
-        }
     end
 
     for i = 1,#matchedParts do
@@ -246,7 +295,6 @@ function shuffleLR(x)
         x:narrow(dim, idx1, 1):copy(x:narrow(dim, idx2, 1))
         x:narrow(dim, idx2, 1):copy(tmp)
     end
-
     return x
 end
 

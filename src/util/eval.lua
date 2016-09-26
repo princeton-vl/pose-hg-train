@@ -2,6 +2,16 @@
 -- Helpful functions for evaluation
 -------------------------------------------------------------------------------
 
+function loadPreds(predFile, doHm, doInp)
+    local f = hdf5.open(projectDir .. '/exp/' .. predFile .. '.h5','r')
+    local inp,hms
+    local idxs = f:read('idxs'):all()
+    local preds = f:read('preds'):all()
+    if doHm then hms = f:read('heatmaps'):all() end
+    if doInp then inp = f:read('input'):all() end
+    return idxs, preds, hms, inp
+end
+
 function calcDists(preds, label, normalize)
     local dists = torch.Tensor(preds:size(2), preds:size(1))
     local diff = torch.Tensor(2)
