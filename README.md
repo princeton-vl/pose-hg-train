@@ -34,11 +34,11 @@ In `src/misc` there's a simple script for monitoring a set of experiments to vis
 
 To generate final test set predictions for MPII, you can call:
 
-`th main.lua -branch your-exp -expID final-preds -finalPredictions 1 -nEpochs 0`
+`th main.lua -branch your-exp -expID final-preds -finalPredictions -nEpochs 0`
 
 This assumes there is an experiment that has already been run. If you just want to provide a pre-trained model, that's fine too and you can call:
 
-`th main.lua -expID final-preds -finalPredictions 1 -nEpochs 0 -loadModel /path/to/model`
+`th main.lua -expID final-preds -finalPredictions -nEpochs 0 -loadModel /path/to/model`
 
 #### Training accuracy metric ####
 
