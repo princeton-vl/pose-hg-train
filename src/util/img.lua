@@ -1,3 +1,16 @@
+function applyFn(fn, t, t2)
+    -- Apply an operation whether passed a table or tensor
+    local t_ = {}
+    if type(t) == "table" then
+        if t2 then
+            for i = 1,#t do t_[i] = applyFn(fn, t[i], t2[i]) end
+        else
+            for i = 1,#t do t_[i] = applyFn(fn, t[i]) end
+        end
+    else t_ = fn(t, t2) end
+    return t_
+end
+
 -------------------------------------------------------------------------------
 -- Coordinate transformation
 -------------------------------------------------------------------------------
@@ -51,11 +64,59 @@ function transform(pt, center, scale, rot, res, invert)
     return new_point:int():add(1)
 end
 
+function transformPreds(coords, center, scale, res)
+    local origDims = coords:size()
+    coords = coords:view(-1,2)
+    local newCoords = coords:clone()
+    for i = 1,coords:size(1) do
+        newCoords[i] = transform(coords[i], center, scale, 0, res, 1)
+    end
+    return newCoords:view(origDims)
+end
+
 -------------------------------------------------------------------------------
 -- Cropping
 -------------------------------------------------------------------------------
 
 function crop(img, center, scale, rot, res)
+    local ndim = img:nDimension()
+    if ndim == 2 then img = img:view(1,img:size(1),img:size(2)) end
+    local ht,wd = img:size(2), img:size(3)
+    local tmpImg = img
+    local scaleFactor = (200 * scale) / res
+    if scaleFactor < 2 then scaleFactor = 1
+    else tmpImg = image.scale(img,math.ceil(math.max(ht,wd) / scaleFactor)) end
+
+    ht,wd = tmpImg:size(2),tmpImg:size(3)
+    local c,s = center/scaleFactor, scale/scaleFactor
+    local ul = transform({1,1}, c, s, 0, res, true)
+    local br = transform({res+1,res+1}, c, s, 0, res, true)
+
+    local pad = math.floor(torch.norm((ul - br):float())/2 - (br[1]-ul[1])/2)
+    if rot ~= 0 then
+        ul = ul - pad
+        br = br + pad
+    end
+
+    local new_ = {1,-1,math.max(1, -ul[2] + 2), math.min(br[2], ht+1) - ul[2],
+                       math.max(1, -ul[1] + 2), math.min(br[1], wd+1) - ul[1]}
+    local old_ = {1,-1,math.max(1, ul[2]), math.min(br[2], ht+1) - 1,
+                       math.max(1, ul[1]), math.min(br[1], wd+1) - 1}
+    local newImg = torch.zeros(img:size(1), br[2] - ul[2] + 1, br[1] - ul[1] + 1)
+    if rot == 0 and scaleFactor > 2 then newImg = torch.zeros(img:size(1),res,res) end
+    newImg:sub(unpack(new_)):copy(tmpImg:sub(unpack(old_)))
+
+    if rot ~= 0 then
+        newImg = image.rotate(newImg, rot * math.pi / 180, 'bilinear')
+        newImg = newImg:sub(1,-1,pad,newImg:size(2)-pad,pad,newImg:size(3)-pad)
+    end
+
+    newImg = image.scale(newImg,res,res)
+    if ndim == 2 then newImg = newImg:view(newImg:size(2),newImg:size(3)) end
+    return newImg
+end
+
+function crop2(img, center, scale, rot, res)
     local ul = transform({1,1}, center, scale, 0, res, true)
     local br = transform({res+1,res+1}, center, scale, 0, res, true)
 
@@ -104,7 +165,7 @@ function crop(img, center, scale, rot, res)
     return newImg
 end
 
-function two_point_crop(img, s, pt1, pt2, pad, res)
+function twoPointCrop(img, s, pt1, pt2, pad, res)
     local center = (pt1 + pt2) / 2
     local scale = math.max(20*s,torch.norm(pt1 - pt2)) * .007
     scale = scale * pad
@@ -116,28 +177,28 @@ end
 -- Non-maximum Suppression
 -------------------------------------------------------------------------------
 
--- Set up max network for NMS
-nms_window_size = 3
-nms_pad = (nms_window_size - 1)/2
-maxlayer = nn.Sequential()
-if cudnn then
-    maxlayer:add(cudnn.SpatialMaxPooling(nms_window_size, nms_window_size,1,1, nms_pad, nms_pad))
-    maxlayer:cuda()
-else
-    maxlayer:add(nn.SpatialMaxPooling(nms_window_size, nms_window_size,1,1, nms_pad,nms_pad))
-end
-maxlayer:evaluate()
+function localMaxes(hm, n, c, s, hmIdx, nmsWindowSize)
+    -- Set up max network for NMS
+    local nmsWindowSize = nmsWindowSize or 3
+    local nmsPad = (nmsWindowSize - 1)/2
+    local maxlayer = nn.Sequential()
+    if cudnn then
+        maxlayer:add(cudnn.SpatialMaxPooling(nmsWindowSize, nmsWindowSize,1,1, nmsPad, nmsPad))
+        maxlayer:cuda()
+    else
+        maxlayer:add(nn.SpatialMaxPooling(nmsWindowSize, nmsWindowSize,1,1, nmsPad,nmsPad))
+        maxlayer:float()
+    end
+    maxlayer:evaluate()
 
-function local_maxes(hm, n, c, s, hm_idx)
-    hm = torch.Tensor(1,16,64,64):copy(hm):float()
-    if hm_idx then hm = hm:sub(1,-1,hm_idx,hm_idx) end
-    local hm_dim = hm:size()
+    local hmSize = torch.totable(hm:size())
+    hm = torch.Tensor(1,unpack(hmSize)):copy(hm):float()
+    if hmIdx then hm = hm:sub(1,-1,hmIdx,hmIdx) end
+    local hmDim = hm:size()
     local max_out
     -- First do nms
     if cudnn then
-        local hmCuda = torch.CudaTensor(1, hm_dim[2], hm_dim[3], hm_dim[4])
-        hmCuda:copy(hm)
-        max_out = maxlayer:forward(hmCuda)
+        max_out = maxlayer:forward(hm:cuda())
         cutorch.synchronize()
     else
         max_out = maxlayer:forward(hm)
@@ -145,18 +206,22 @@ function local_maxes(hm, n, c, s, hm_idx)
 
     local nms = torch.cmul(hm, torch.eq(hm, max_out:float()):float())[1]
     -- Loop through each heatmap retrieving top n locations, and their scores
-    local pred_coords = torch.Tensor(hm_dim[2], n, 2)
-    local pred_scores = torch.Tensor(hm_dim[2], n)
-    for i = 1, hm_dim[2] do
+    local predCoords = torch.Tensor(hmDim[2], n, 2)
+    local predScores = torch.Tensor(hmDim[2], n)
+    for i = 1, hmDim[2] do
         local nms_flat = nms[i]:view(nms[i]:nElement())
         local vals,idxs = torch.sort(nms_flat,1,true)
         for j = 1,n do
-            local pt = {idxs[j] % 64, torch.ceil(idxs[j] / 64) }
-            pred_coords[i][j] = transform(pt, c, s, 0, 64, true)
-            pred_scores[i][j] = vals[j]
+            local pt = {(idxs[j]-1) % hmSize[3] + 1, math.floor((idxs[j]-1) / hmSize[3]) + 1 }
+            if c then
+                predCoords[i][j] = transform(pt, c, s, 0, hmSize[#hmSize], true)
+            else
+                predCoords[i][j] = torch.Tensor(pt)
+            end
+            predScores[i][j] = vals[j]
         end
     end
-    return pred_coords, pred_scores
+    return predCoords, predScores
 end
 
 -------------------------------------------------------------------------------
@@ -185,30 +250,51 @@ function drawGaussian(img, pt, sigma)
     return img
 end
 
-function drawLine(img,pt1,pt2,width,val,doGauss)
-    val = val or 1
-    doGauss = doGauss or 1
-    pt1 = torch.Tensor(pt1)
-    pt2 = torch.Tensor(pt2)
-    m = torch.dist(pt1,pt2)
+function drawLine(img, pt1, pt2, width, color)
+    if img:nDimension() == 2 then img = img:view(1,img:size(1),img:size(2)) end
+    local nChannels = img:size(1)
+    color = color or torch.ones(nChannels)
+    if type(pt1) == 'table' then pt1 = torch.Tensor(pt1) end
+    if type(pt2) == 'table' then pt2 = torch.Tensor(pt2) end
+
+    m = pt1:dist(pt2)
     dy = (pt2[2] - pt1[2])/m
     dx = (pt2[1] - pt1[1])/m
     for j = 1,width do
-        start_pt1 = torch.Tensor({pt1[1] + (-width/2 + j-1)*dy,
-                                  pt1[2] - (-width/2 + j-1)*dx})
+        start_pt1 = torch.Tensor({pt1[1] + (-width/2 + j-1)*dy, pt1[2] - (-width/2 + j-1)*dx})
         start_pt1:ceil()
         for i = 1,torch.ceil(m) do
             y_idx = torch.ceil(start_pt1[2]+dy*i)
             x_idx = torch.ceil(start_pt1[1]+dx*i)
-            if doGauss == 1 and j == torch.ceil(width/2) and (i == 1 or i == torch.ceil(m)) then
-                img = drawGaussian(img, {x_idx,y_idx}, width/3)
+            if y_idx - 1 > 0 and x_idx -1 > 0 
+            and y_idx < img:size(2) and x_idx < img:size(3) then
+                for j = 1,nChannels do img[j]:sub(y_idx-1,y_idx,x_idx-1,x_idx):fill(color[j]) end
             end
-            if y_idx - 1 > 0 and x_idx -1 > 0 and y_idx < img:size(1) and x_idx < img:size(2) then
-                img:sub(y_idx-1,y_idx,x_idx-1,x_idx):fill(val)
-            end
-        end 
+        end
     end
-    img[img:gt(1)] = 1
+end
+
+function drawSkeleton(img,preds,scores,color)
+    for i = 1,#dataset.pairRef do
+        local pt1,pt2 = unpack(dataset.pairRef[i])
+        if scores[pt1] > 0 and scores[pt2] > 0 then
+            drawLine(img,preds[pt1],preds[pt2],4,color)
+        elseif scores[pt1] > 0 then
+            local tmpX,tmpY = unpack(preds[pt1]:totable())
+            local lY,uY = math.min(img:size(2),math.max(1,tmpY-2)),math.min(img:size(2),math.max(1,tmpY+2))
+            local lX,uX = math.min(img:size(3),math.max(1,tmpX-2)),math.min(img:size(3),math.max(1,tmpX+2))
+            img:sub(1,1,lY,uY,lX,uX):fill(color[1])
+            img:sub(2,2,lY,uY,lX,uX):fill(color[2])
+            img:sub(3,3,lY,uY,lX,uX):fill(color[3])
+        elseif scores[pt2] > 0 then
+            local tmpX,tmpY = unpack(preds[pt2]:totable())
+            local lY,uY = math.min(img:size(2),math.max(1,tmpY-2)),math.min(img:size(2),math.max(1,tmpY+2))
+            local lX,uX = math.min(img:size(3),math.max(1,tmpX-2)),math.min(img:size(3),math.max(1,tmpX+2))
+            img:sub(1,1,lY,uY,lX,uX):fill(color[1])
+            img:sub(2,2,lY,uY,lX,uX):fill(color[2])
+            img:sub(3,3,lY,uY,lX,uX):fill(color[3])
+        end
+    end
 end
 
 -------------------------------------------------------------------------------
@@ -217,22 +303,7 @@ end
 
 function shuffleLR(x)
     local dim
-    local matchedParts
-    if opt.dataset == 'mpii' then
-        matchedParts = {
-            {1,6},   {2,5},   {3,4},
-            {11,16}, {12,15}, {13,14}
-        }
-    elseif opt.dataset == 'flic' then
-        matchedParts = {
-            {1,4}, {2,5}, {3,6}, {7,8}, {9,10}
-        }
-    elseif opt.dataset == 'lsp' then
-        matchedParts = {
-            {1,6}, {2,5}, {3,4}, {7,12}, {8,11}, {9,10}
-        }
-    end
-
+    local matchedParts = dataset.flipRef
     if x:nDimension() == 4 or x:nDimension() == 2 then
         dim = 2
     else
@@ -246,7 +317,6 @@ function shuffleLR(x)
         x:narrow(dim, idx1, 1):copy(x:narrow(dim, idx2, 1))
         x:narrow(dim, idx2, 1):copy(tmp)
     end
-
     return x
 end
 

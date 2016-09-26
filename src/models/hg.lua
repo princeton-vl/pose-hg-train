@@ -48,19 +48,20 @@ function createModel()
     for i = 1,opt.nStack do
         local hg = hourglass(4,opt.nFeats,inter)
 
-        -- Linear layer to produce first set of predictions
+        -- Residual layers at output resolution
         local ll = hg
         for j = 1,opt.nModules do ll = Residual(opt.nFeats,opt.nFeats)(ll) end
+        -- Linear layer to produce first set of predictions
         ll = lin(opt.nFeats,opt.nFeats,ll)
 
         -- Predicted heatmaps
-        local tmpOut = nnlib.SpatialConvolution(opt.nFeats,nParts,1,1,1,1,0,0)(ll)
+        local tmpOut = nnlib.SpatialConvolution(opt.nFeats,ref.nOutChannels,1,1,1,1,0,0)(ll)
         table.insert(out,tmpOut)
 
+        -- Add predictions back
         if i < opt.nStack then
-            -- Add predictions back
             local ll_ = nnlib.SpatialConvolution(opt.nFeats,opt.nFeats,1,1,1,1,0,0)(ll)
-            local tmpOut_ = nnlib.SpatialConvolution(nParts,opt.nFeats,1,1,1,1,0,0)(tmpOut)
+            local tmpOut_ = nnlib.SpatialConvolution(ref.nOutChannels,opt.nFeats,1,1,1,1,0,0)(tmpOut)
             inter = nn.CAddTable()({inter, ll_, tmpOut_})
         end
     end
