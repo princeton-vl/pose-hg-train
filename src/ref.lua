@@ -25,7 +25,7 @@ else torch.seed() end
 
 -- Initialize dataset
 if not dataset then
-    local Dataset = paths.dofile(projectDir .. 'src/util/dataset/' .. opt.dataset .. '.lua')
+    local Dataset = paths.dofile(projectDir .. '/src/util/dataset/' .. opt.dataset .. '.lua')
     dataset = Dataset()
 end
 

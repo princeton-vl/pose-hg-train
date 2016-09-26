@@ -8,7 +8,7 @@ function loadPreds(predFile, doHm, doInp)
     local idxs = f:read('idxs'):all()
     local preds = f:read('preds'):all()
     if doHm then hms = f:read('heatmaps'):all() end
-    if doInp then inp = f:read('inp'):all() end
+    if doInp then inp = f:read('input'):all() end
     return idxs, preds, hms, inp
 end
 

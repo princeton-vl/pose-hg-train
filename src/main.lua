@@ -5,7 +5,7 @@ paths.dofile('train.lua')   -- Load up training/testing functions
 
 -- Set up data loader
 torch.setnumthreads(1)
-local Dataloader = require 'dataloader'
+local Dataloader = paths.dofile('util/dataloader.lua')
 loader = Dataloader.create(opt, dataset, ref)
 
 -- Initialize logs
@@ -15,6 +15,7 @@ ref.log.valid = Logger(paths.concat(opt.save, 'valid.log'), opt.continue)
 
 -- Main training loop
 for i=1,opt.nEpochs do
+    print("==> Starting epoch: " .. epoch .. "/" .. (opt.nEpochs + opt.epochNumber - 1))
     if opt.trainIters > 0 then train() end
     if opt.validIters > 0 then valid() end
     epoch = epoch + 1
@@ -31,4 +32,8 @@ torch.save(paths.concat(opt.save,'optimState.t7'), optimState)
 torch.save(paths.concat(opt.save,'final_model.t7'), model)
 
 -- Generate final predictions on validation set
-if opt.finalPredictions then predict() end
+if opt.finalPredictions then
+	ref.log = {}
+	loader.test = Dataloader(opt, dataset, ref, 'test')
+	predict()
+end

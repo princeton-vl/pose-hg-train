@@ -12,7 +12,7 @@ local function rnd(x) return math.max(-2*x,math.min(2*x,torch.randn(1)[1]*x)) en
 
 -- Code to generate training samples from raw images
 function generateSample(set, idx)
-    local img = datset:loadImage(idx)
+    local img = dataset:loadImage(idx)
     local pts, c, s = dataset:getPartInfo(idx)
     local r = 0
 
@@ -24,14 +24,14 @@ function generateSample(set, idx)
     end
 
     local inp = crop(img, c, s, r, opt.inputRes)
-    local out = torch.zeros(nParts, opt.outputRes, opt.outputRes)
-    for i = 1,nParts do
-        if pts[i][1] > 0 then -- Checks that there is a ground truth annotation
+    local out = torch.zeros(dataset.nJoints, opt.outputRes, opt.outputRes)
+    for i = 1,dataset.nJoints do
+        if pts[i][1] > 1 then -- Checks that there is a ground truth annotation
             drawGaussian(out[i], transform(torch.add(pts[i],1), c, s, r, opt.outputRes), 1)
         end
     end
 
-    if set == 'train' and not augmentRef.noaug then
+    if set == 'train' then
         -- Flipping and color augmentation
         if torch.uniform() < .5 then
             inp = flip(inp)
@@ -46,7 +46,7 @@ function generateSample(set, idx)
 end
 
 -- Load in a mini-batch of data
-function loadData(set, idxs, aug)
+function loadData(set, idxs)
     if type(idxs) == 'table' then idxs = torch.Tensor(idxs) end
     local nsamples = idxs:size(1)
     local input,label
@@ -94,13 +94,13 @@ function postprocess(set, idx, output)
             end
         end
     end
-    p:add(-0.5)
+    p:add(0.5)
 
     -- Transform predictions back to original coordinate space
     local p_tf = torch.zeros(p:size())
     for i = 1,p:size(1) do
         _,c,s = dataset:getPartInfo(idx[i])
-        p_tf[i]:copy(transformPreds(p[i], c, s, opt.outputRes)
+        p_tf[i]:copy(transformPreds(p[i], c, s, opt.outputRes))
     end
     
     return p_tf:cat(p,3):cat(scores,3)

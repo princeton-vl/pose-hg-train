@@ -72,7 +72,7 @@ end
 -- Process command line options
 -------------------------------------------------------------------------------
 
-opt = opts.parse(arg)
+opt = parse(arg)
 
 print('Saving everything to: ' .. opt.save)
 os.execute('mkdir -p ' .. opt.save)

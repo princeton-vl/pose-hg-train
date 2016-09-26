@@ -6,6 +6,12 @@ function Dataset:__init()
     self.accIdxs = {1,2,3,4,5,6,11,12,15,16}
     self.flipRef = {{1,6},   {2,5},   {3,4},
                     {11,16}, {12,15}, {13,14}}
+    -- Pairs of joints for drawing skeleton
+    self.skeletonRef = {{1,2,1},    {2,3,1},    {3,7,1},
+                        {4,5,2},    {4,7,2},    {5,6,2},
+                        {7,9,0},    {9,10,0},
+                        {13,9,3},   {11,12,3},  {12,13,3},
+                        {14,9,4},   {14,15,4},  {15,16,4}}
 
     local annot = {}
     local tags = {'index','person','imgname','part','center','scale',
@@ -28,6 +34,7 @@ function Dataset:__init()
         local perm = torch.randperm(opt.idxRef.train:size(1)):long()
         opt.idxRef.valid = opt.idxRef.train:index(1, perm:sub(1,opt.nValidImgs))
         opt.idxRef.train = opt.idxRef.train:index(1, perm:sub(opt.nValidImgs+1,-1))
+
         torch.save(opt.save .. '/options.t7', opt)
     end
 
@@ -35,6 +42,10 @@ function Dataset:__init()
     self.nsamples = {train=opt.idxRef.train:numel(),
                      valid=opt.idxRef.valid:numel(),
                      test=opt.idxRef.test:numel()}
+
+    -- For final predictions
+    opt.testIters = self.nsamples.test
+    opt.testBatch = 1
 end
 
 function Dataset:size(set)
@@ -42,7 +53,7 @@ function Dataset:size(set)
 end
 
 function Dataset:getPath(idx)
-    return paths.concat(opt.dataDir,'mpii/images',ffi.string(self.annot.imgname[idx]:char():data()))
+    return paths.concat(opt.dataDir,'images',ffi.string(self.annot.imgname[idx]:char():data()))
 end
 
 function Dataset:loadImage(idx)
@@ -50,7 +61,13 @@ function Dataset:loadImage(idx)
 end
 
 function Dataset:getPartInfo(idx)
-    return self.annot.part[idx], self.annot.center[idx], self.annot.scale[idx]
+    local pts = self.annot.part[idx]:clone()
+    local c = self.annot.center[idx]:clone()
+    local s = self.annot.scale[idx]
+    -- Small adjustment so cropping is less likely to take feet out
+    c[2] = c[2] + 15 * s
+    s = s * 1.25
+    return pts, c, s
 end
 
 function Dataset:normalize(idx)
@@ -59,10 +76,3 @@ end
 
 return M.Dataset
 
-    -- Pairs of joints for drawing skeleton (1=left, 2=right)
-    -- self.skeletonRef = {
-    --         {1,2,1},      {2,3},      {3,7},
-    --         {4,5},      {4,7},      {5,6},
-    --         {7,9},      {9,10},
-    --         {14,9},     {11,12},    {12,13},
-    --         {13,9},     {14,15},    {15,16}}

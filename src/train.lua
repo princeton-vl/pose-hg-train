@@ -13,13 +13,21 @@ function step(tag)
     local function evalFn(x) return criterion.output, gradparam end
 
     if tag == 'train' then
-        print("==> Starting epoch: " .. epoch .. "/" .. (opt.nEpochs + opt.epochNumber - 1))
         model:training()
         set = 'train'
     else
-        if tag == 'predict' then print("==> Generating predictions...") end
         model:evaluate()
-        set = 'valid'
+        if tag == 'predict' then
+            print("==> Generating predictions...")
+            local nSamples = dataset:size('test')
+            saved = {idxs = torch.Tensor(nSamples),
+                     preds = torch.Tensor(nSamples, unpack(ref.predDim))}
+            if opt.saveInput then saved.input = torch.Tensor(nSamples, unpack(ref.inputDim)) end
+            if opt.saveHeatmaps then saved.heatmaps = torch.Tensor(nSamples, unpack(ref.outputDim[1])) end
+            set = 'test'
+        else
+            set = 'valid'
+        end
     end
 
     local nIters = opt[set .. 'Iters']
@@ -51,26 +59,26 @@ function step(tag)
             output = applyFn(function (x,y) return x:add(y):div(2) end, output, flippedOut)
 
             -- Save sample
-            local batchsize = opt[set .. 'Batch']
-            local tmpIdx = (i-1) * batchsize + 1
+            local bs = opt[set .. 'Batch']
+            local tmpIdx = (i-1) * bs + 1
             local tmpOut = output
-            if #outputDim > 1 then tmpOut = output[#output] end
-            if opt.saveInput then saved.input:sub(tmpIdx, tmpIdx + batchsize):copy(input) end
-            if opt.saveHeatmaps then saved.heatmaps:sub(tmpIdx, tmpIdx + batchsize):copy(tmpOut) end
-            opt.idxs:sub(tmpIdx, tmpIdx + batchsize):copy(indices)
-            opt.preds:sub(tmpIdx, tmpIdx + batchsize):copy(postprocess(set,indices,output))
+            if type(tmpOut) == 'table' then tmpOut = output[#output] end
+            if opt.saveInput then saved.input:sub(tmpIdx, tmpIdx+bs-1):copy(input) end
+            if opt.saveHeatmaps then saved.heatmaps:sub(tmpIdx, tmpIdx+bs-1):copy(tmpOut) end
+            saved.idxs:sub(tmpIdx, tmpIdx+bs-1):copy(indices)
+            saved.preds:sub(tmpIdx, tmpIdx+bs-1):copy(postprocess(set,indices,output))
         end
 
         -- Calculate accuracy
         avgAcc = avgAcc + accuracy(output, label) / nIters
     end
 
-    table.insert(opt.acc[set], avgAcc)
 
     -- Print and log some useful metrics
     print(string.format("      %s : Loss: %.7f Acc: %.4f"  % {set, avgLoss, avgAcc}))
-    if r.log then
-        r.log:add{
+    if ref.log[set] then
+        table.insert(opt.acc[set], avgAcc)
+        ref.log[set]:add{
             ['epoch     '] = string.format("%d" % epoch),
             ['loss      '] = string.format("%.6f" % avgLoss),
             ['acc       '] = string.format("%.4f" % avgAcc),

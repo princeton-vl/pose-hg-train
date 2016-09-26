@@ -88,7 +88,7 @@ function crop(img, center, scale, rot, res)
     else tmpImg = image.scale(img,math.ceil(math.max(ht,wd) / scaleFactor)) end
 
     ht,wd = tmpImg:size(2),tmpImg:size(3)
-    local c,s = center/scaleFactor, scale/scaleFactor
+    local c,s = center:float()/scaleFactor, scale/scaleFactor
     local ul = transform({1,1}, c, s, 0, res, true)
     local br = transform({res+1,res+1}, c, s, 0, res, true)
 
@@ -113,55 +113,6 @@ function crop(img, center, scale, rot, res)
 
     newImg = image.scale(newImg,res,res)
     if ndim == 2 then newImg = newImg:view(newImg:size(2),newImg:size(3)) end
-    return newImg
-end
-
-function crop2(img, center, scale, rot, res)
-    local ul = transform({1,1}, center, scale, 0, res, true)
-    local br = transform({res+1,res+1}, center, scale, 0, res, true)
-
-
-    local pad = math.floor(torch.norm((ul - br):float())/2 - (br[1]-ul[1])/2)
-    if rot ~= 0 then
-        ul = ul - pad
-        br = br + pad
-    end
-
-    local newDim,newImg,ht,wd
-
-    if img:size():size() > 2 then
-        newDim = torch.IntTensor({img:size(1), br[2] - ul[2], br[1] - ul[1]})
-        newImg = torch.zeros(newDim[1],newDim[2],newDim[3])
-        ht = img:size(2)
-        wd = img:size(3)
-    else
-        newDim = torch.IntTensor({br[2] - ul[2], br[1] - ul[1]})
-        newImg = torch.zeros(newDim[1],newDim[2])
-        ht = img:size(1)
-        wd = img:size(2)
-    end
-
-    local newX = torch.Tensor({math.max(1, -ul[1] + 2), math.min(br[1], wd+1) - ul[1]})
-    local newY = torch.Tensor({math.max(1, -ul[2] + 2), math.min(br[2], ht+1) - ul[2]})
-    local oldX = torch.Tensor({math.max(1, ul[1]), math.min(br[1], wd+1) - 1})
-    local oldY = torch.Tensor({math.max(1, ul[2]), math.min(br[2], ht+1) - 1})
-
-    if newDim:size(1) > 2 then
-        newImg:sub(1,newDim[1],newY[1],newY[2],newX[1],newX[2]):copy(img:sub(1,newDim[1],oldY[1],oldY[2],oldX[1],oldX[2]))
-    else
-        newImg:sub(newY[1],newY[2],newX[1],newX[2]):copy(img:sub(oldY[1],oldY[2],oldX[1],oldX[2]))
-    end
-
-    if rot ~= 0 then
-        newImg = image.rotate(newImg, rot * math.pi / 180, 'bilinear')
-        if newDim:size(1) > 2 then
-            newImg = newImg:sub(1,newDim[1],pad,newDim[2]-pad,pad,newDim[3]-pad)
-        else
-            newImg = newImg:sub(pad,newDim[1]-pad,pad,newDim[2]-pad)
-        end
-    end
-
-    newImg = image.scale(newImg,res,res)
     return newImg
 end
 
@@ -274,27 +225,54 @@ function drawLine(img, pt1, pt2, width, color)
     end
 end
 
-function drawSkeleton(img,preds,scores,color)
-    for i = 1,#dataset.pairRef do
-        local pt1,pt2 = unpack(dataset.pairRef[i])
-        if scores[pt1] > 0 and scores[pt2] > 0 then
-            drawLine(img,preds[pt1],preds[pt2],4,color)
-        elseif scores[pt1] > 0 then
-            local tmpX,tmpY = unpack(preds[pt1]:totable())
-            local lY,uY = math.min(img:size(2),math.max(1,tmpY-2)),math.min(img:size(2),math.max(1,tmpY+2))
-            local lX,uX = math.min(img:size(3),math.max(1,tmpX-2)),math.min(img:size(3),math.max(1,tmpX+2))
-            img:sub(1,1,lY,uY,lX,uX):fill(color[1])
-            img:sub(2,2,lY,uY,lX,uX):fill(color[2])
-            img:sub(3,3,lY,uY,lX,uX):fill(color[3])
-        elseif scores[pt2] > 0 then
-            local tmpX,tmpY = unpack(preds[pt2]:totable())
-            local lY,uY = math.min(img:size(2),math.max(1,tmpY-2)),math.min(img:size(2),math.max(1,tmpY+2))
-            local lX,uX = math.min(img:size(3),math.max(1,tmpX-2)),math.min(img:size(3),math.max(1,tmpX+2))
-            img:sub(1,1,lY,uY,lX,uX):fill(color[1])
-            img:sub(2,2,lY,uY,lX,uX):fill(color[2])
-            img:sub(3,3,lY,uY,lX,uX):fill(color[3])
+function drawSkeleton(img, preds, scores)
+    preds = preds:clone():add(1) -- Account for 1-indexing in lua
+    local pairRef = dataset.skeletonRef
+    local actThresh = 0.05
+    -- Loop through adjacent joint pairings
+    for i = 1,#pairRef do
+        if scores[pairRef[i][1]] > actThresh and scores[pairRef[i][2]] > actThresh then
+            -- Set appropriate line color
+            local color
+            if pairRef[i][3] == 1 then color = {0,.3,1}
+            elseif pairRef[i][3] == 2 then color = {1,.3,0}
+            elseif pairRef[i][3] == 3 then color = {0,0,1}
+            elseif pairRef[i][3] == 4 then color = {1,0,0}
+            else color = {.7,0,.7} end
+            -- Draw line
+            drawLine(img, preds[pairRef[i][1]], preds[pairRef[i][2]], 4, color, 0)
         end
     end
+    return img
+end
+
+function heatmapVisualization(set, idx, pred, inp, gt)
+    local set = set or 'valid'
+    local hmImg
+    local tmpInp,tmpHm
+    if not inp then
+        inp, gt = loadData(set,{idx})
+        inp = inp[1]
+        gt = gt[1][1]
+        tmpInp,tmpHm = inp,gt
+    else
+        tmpInp = inp
+        tmpHm = gt or pred
+    end
+    local nOut,res = tmpHm:size(1),tmpHm:size(3)
+    -- Repeat input image, and darken it to overlay heatmaps
+    tmpInp = image.scale(tmpInp,res):mul(.3)
+    tmpInp[1][1][1] = 1
+    hmImg = tmpInp:repeatTensor(nOut,1,1,1)
+    if gt then -- Copy ground truth heatmaps to red channel
+        hmImg:sub(1,-1,1,1):add(gt:clone():mul(.7))
+    end
+    if pred then -- Copy predicted heatmaps to blue channel
+        hmImg:sub(1,-1,3,3):add(pred:clone():mul(.7))
+    end
+    -- Rescale so it is a little easier to see
+    hmImg = image.scale(hmImg:view(nOut*3,res,res),256):view(nOut,3,256,256)
+    return hmImg, inp
 end
 
 -------------------------------------------------------------------------------

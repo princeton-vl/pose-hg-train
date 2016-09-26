@@ -14,7 +14,7 @@ local Threads = require 'threads'
 Threads.serialization('threads.sharedserialize')
 
 local M = {}
-local DataLoader = torch.class('resnet.DataLoader', M)
+local DataLoader = torch.class('DataLoader', M)
 
 function DataLoader.create(opt, dataset, ref)
    -- The train and valid loader
@@ -30,9 +30,13 @@ function DataLoader.create(opt, dataset, ref)
 end
 
 function DataLoader:__init(opt, dataset, ref, split)
+    local function preinit()
+        paths.dofile('dataset/' .. opt.dataset .. '.lua')
+    end
+
     local function init()
         _G.opt, _G.dataset, _G.ref, _G.split = opt, dataset, ref, split
-        paths.dofile('ref.lua')
+        paths.dofile('../ref.lua')
     end
 
     local function main(idx)
@@ -40,7 +44,7 @@ function DataLoader:__init(opt, dataset, ref, split)
         return dataset:size(split)
     end
 
-    local threads, sizes = Threads(opt.nThreads, init, main)
+    local threads, sizes = Threads(opt.nThreads, preinit, init, main)
     self.threads = threads
     self.iters = opt[split .. 'Iters']
     self.batchsize = opt[split .. 'Batch']
@@ -68,7 +72,7 @@ function DataLoader:run()
     local n, idx, sample = 0, 1, nil
     local function enqueue()
         while idx <= size and threads:acceptsjob() do
-            local indices = idxs:narrow(1, idx, math.min(batchsize, size - idx + 1))
+            local indices = idxs:narrow(1, idx, math.min(self.batchsize, size - idx + 1))
             threads:addjob(
                 function(indices)
                     local inp,out = _G.loadData(_G.split, indices)
@@ -77,7 +81,7 @@ function DataLoader:run()
                 end,
                 function(_sample_) sample = _sample_ end, indices
             )
-            idx = idx + batchsize
+            idx = idx + self.batchsize
         end
     end
 
