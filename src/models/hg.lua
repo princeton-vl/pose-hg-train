@@ -50,7 +50,8 @@ function createModel()
 
         -- Linear layer to produce first set of predictions
         local ll = hg
-        for j = 1,opt.nModules do ll = lin(opt.nFeats,opt.nFeats,ll) end
+        for j = 1,opt.nModules do ll = Residual(opt.nFeats,opt.nFeats)(ll) end
+        ll = lin(opt.nFeats,opt.nFeats,ll)
 
         -- Predicted heatmaps
         local tmpOut = nnlib.SpatialConvolution(opt.nFeats,nParts,1,1,1,1,0,0)(ll)
