@@ -78,6 +78,10 @@ end
 -- Cropping
 -------------------------------------------------------------------------------
 
+function checkDims(dims)
+    return dims[3] < dims[4] and dims[5] < dims[6]
+end
+
 function crop(img, center, scale, rot, res)
     local ndim = img:nDimension()
     if ndim == 2 then img = img:view(1,img:size(1),img:size(2)) end
@@ -92,7 +96,7 @@ function crop(img, center, scale, rot, res)
     local ul = transform({1,1}, c, s, 0, res, true)
     local br = transform({res+1,res+1}, c, s, 0, res, true)
 
-    local pad = math.floor(torch.norm((ul - br):float())/2 - (br[1]-ul[1])/2)
+    local pad = math.ceil(torch.norm((ul - br):float())/2 - (br[1]-ul[1])/2)
     if rot ~= 0 then
         ul = ul - pad
         br = br + pad
@@ -102,6 +106,10 @@ function crop(img, center, scale, rot, res)
                        math.max(1, -ul[1] + 2), math.min(br[1], wd+1) - ul[1]}
     local old_ = {1,-1,math.max(1, ul[2]), math.min(br[2], ht+1) - 1,
                        math.max(1, ul[1]), math.min(br[1], wd+1) - 1}
+    -- Check that dimensions are okay
+    if not (checkDims(new_) and checkDims(old_)) then
+        return torch.zeros(img:size(1),res,res)
+    end
     local newImg = torch.zeros(img:size(1), br[2] - ul[2] + 1, br[1] - ul[1] + 1)
     if rot == 0 and scaleFactor > 2 then newImg = torch.zeros(img:size(1),res,res) end
     newImg:sub(unpack(new_)):copy(tmpImg:sub(unpack(old_)))
@@ -113,6 +121,55 @@ function crop(img, center, scale, rot, res)
 
     newImg = image.scale(newImg,res,res)
     if ndim == 2 then newImg = newImg:view(newImg:size(2),newImg:size(3)) end
+    return newImg
+end
+
+function crop2(img, center, scale, rot, res)
+    local ul = transform({1,1}, center, scale, 0, res, true)
+    local br = transform({res+1,res+1}, center, scale, 0, res, true)
+
+
+    local pad = math.ceil(torch.norm((ul - br):float())/2 - (br[1]-ul[1])/2)
+    if rot ~= 0 then
+        ul = ul - pad
+        br = br + pad
+    end
+
+    local newDim,newImg,ht,wd
+
+    if img:size():size() > 2 then
+        newDim = torch.IntTensor({img:size(1), br[2] - ul[2], br[1] - ul[1]})
+        newImg = torch.zeros(newDim[1],newDim[2],newDim[3])
+        ht = img:size(2)
+        wd = img:size(3)
+    else
+        newDim = torch.IntTensor({br[2] - ul[2], br[1] - ul[1]})
+        newImg = torch.zeros(newDim[1],newDim[2])
+        ht = img:size(1)
+        wd = img:size(2)
+    end
+
+    local newX = torch.Tensor({math.max(1, -ul[1] + 2), math.min(br[1], wd+1) - ul[1]})
+    local newY = torch.Tensor({math.max(1, -ul[2] + 2), math.min(br[2], ht+1) - ul[2]})
+    local oldX = torch.Tensor({math.max(1, ul[1]), math.min(br[1], wd+1) - 1})
+    local oldY = torch.Tensor({math.max(1, ul[2]), math.min(br[2], ht+1) - 1})
+
+    if newDim:size(1) > 2 then
+        newImg:sub(1,newDim[1],newY[1],newY[2],newX[1],newX[2]):copy(img:sub(1,newDim[1],oldY[1],oldY[2],oldX[1],oldX[2]))
+    else
+        newImg:sub(newY[1],newY[2],newX[1],newX[2]):copy(img:sub(oldY[1],oldY[2],oldX[1],oldX[2]))
+    end
+
+    if rot ~= 0 then
+        newImg = image.rotate(newImg, rot * math.pi / 180, 'bilinear')
+        if newDim:size(1) > 2 then
+            newImg = newImg:sub(1,newDim[1],pad,newDim[2]-pad,pad,newDim[3]-pad)
+        else
+            newImg = newImg:sub(pad,newDim[1]-pad,pad,newDim[2]-pad)
+        end
+    end
+
+    newImg = image.scale(newImg,res,res)
     return newImg
 end
 
