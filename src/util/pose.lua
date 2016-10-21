@@ -27,7 +27,7 @@ function generateSample(set, idx)
     local out = torch.zeros(dataset.nJoints, opt.outputRes, opt.outputRes)
     for i = 1,dataset.nJoints do
         if pts[i][1] > 1 then -- Checks that there is a ground truth annotation
-            drawGaussian(out[i], transform(torch.add(pts[i],1), c, s, r, opt.outputRes), 1)
+            drawGaussian(out[i], transform(pts[i], c, s, r, opt.outputRes), opt.hmGauss)
         end
     end
 
