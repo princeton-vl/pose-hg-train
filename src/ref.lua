@@ -76,5 +76,9 @@ if not ref.alreadyChecked then
 
     printDims("Input is a ", ref.inputDim)
     printDims("Output is a ", ref.outputDim)
+
+    print("# of training images:", opt.idxRef.train:size(1))
+    print("# of validation images:", opt.idxRef.valid:size(1))
+
     ref.alreadyChecked = true
 end

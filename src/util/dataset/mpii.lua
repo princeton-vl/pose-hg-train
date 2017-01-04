@@ -30,10 +30,35 @@ function Dataset:__init()
         opt.idxRef.test = allIdxs[annot.istrain:eq(0)]
         opt.idxRef.train = allIdxs[annot.istrain:eq(1)]
 
-        -- Set up training/validation split
-        local perm = torch.randperm(opt.idxRef.train:size(1)):long()
-        opt.idxRef.valid = opt.idxRef.train:index(1, perm:sub(1,opt.nValidImgs))
-        opt.idxRef.train = opt.idxRef.train:index(1, perm:sub(opt.nValidImgs+1,-1))
+        if not opt.randomValid then
+            -- Use same validation set as used in our paper (and same as Tompson et al)
+            tmpAnnot = annot.index:cat(annot.person, 2):long()
+            tmpAnnot:add(-1)
+
+            local validAnnot = hdf5.open(paths.concat(projectDir, 'data/mpii/annot/valid.h5'),'r')
+            local tmpValid = validAnnot:read('index'):all():cat(validAnnot:read('person'):all(),2):long()
+            opt.idxRef.valid = torch.zeros(tmpValid:size(1))
+            opt.nValidImgs = opt.idxRef.valid:size(1)
+            opt.idxRef.train = torch.zeros(opt.idxRef.train:size(1) - opt.nValidImgs)
+
+            -- Loop through to get proper index values
+            local validCount = 1
+            local trainCount = 1
+            for i = 1,annot.index:size(1) do
+                if validCount <= tmpValid:size(1) and tmpAnnot[i]:equal(tmpValid[validCount]) then
+                    opt.idxRef.valid[validCount] = i
+                    validCount = validCount + 1
+                elseif annot.istrain[i] == 1 then
+                    opt.idxRef.train[trainCount] = i
+                    trainCount = trainCount + 1
+                end
+            end
+        else
+            -- Set up random training/validation split
+            local perm = torch.randperm(opt.idxRef.train:size(1)):long()
+            opt.idxRef.valid = opt.idxRef.train:index(1, perm:sub(1,opt.nValidImgs))
+            opt.idxRef.train = opt.idxRef.train:index(1, perm:sub(opt.nValidImgs+1,-1))
+        end
 
         torch.save(opt.save .. '/options.t7', opt)
     end
